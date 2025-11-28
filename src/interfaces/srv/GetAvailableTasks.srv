@@ -1,0 +1,8 @@
+# Request available tasks
+uint32 agent_id
+int32 max_distance  # -1 for no limit
+---
+# Response with list of available tasks
+bool success
+TaskInfo[] available_tasks
+

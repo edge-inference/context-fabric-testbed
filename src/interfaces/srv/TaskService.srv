@@ -1,0 +1,8 @@
+string action  # "claim", "release", "complete"
+uint32 agent_id
+uint32 task_id
+---
+bool success
+string message
+TaskAssignment assigned_task
+

@@ -1,0 +1,9 @@
+# Create a new task at a location
+int32 location
+string task_type
+float32 priority
+---
+# Response
+bool success
+uint32 task_id
+

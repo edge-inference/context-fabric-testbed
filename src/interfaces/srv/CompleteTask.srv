@@ -1,0 +1,8 @@
+# Complete a task
+uint32 agent_id
+uint32 task_id
+---
+# Response
+bool success
+string message
+

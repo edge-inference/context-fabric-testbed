@@ -1,0 +1,38 @@
+# Lingua Franca Generated Files
+fed-gen/
+bin/
+*.so
+*.o
+
+# ROS 2 Build Artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled binaries
+*.out
+*.exe
+RTI
+federate__*
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+

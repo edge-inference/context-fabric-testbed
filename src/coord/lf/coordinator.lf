@@ -1,0 +1,153 @@
+/**
+ * Federated Coordinator for ROS2 Warehouse Testbed
+ * 
+ * Implements distributed task coordination with deterministic execution.
+ * Each federate maintains synchronized state through logical time ordering.
+ */
+
+target Python {
+    coordination: centralized,
+    files: ["../coord/lease_manager.py", "../coord/task_registry.py", "../coord/coordinator.py"]
+}
+
+preamble {=
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../coord"))
+
+from coordinator import Coordinator
+=}
+
+/**
+ * CoordinatorFederate: Replicated coordinator on each Jetson
+ */
+reactor CoordinatorFederate(
+    device_id = 1,
+    lease_ttl_ms = 300000
+) {
+    state coordinator
+    state current_time_ms = 0
+    
+    input claim_request
+    input complete_request
+    input create_request
+    input get_tasks_request
+    
+    output claim_response
+    output complete_response
+    output create_response
+    output get_tasks_response
+    
+    timer tick(0, 100 msec)
+    
+    reaction(startup) {=
+        self.coordinator = Coordinator(default_lease_ttl_ms=self.lease_ttl_ms)
+        print(f"[LF Coordinator Federate {self.device_id}] Started")
+    =}
+    
+    reaction(tick) {=
+        self.current_time_ms = int(lf.time.logical_elapsed() / 1_000_000)
+        self.coordinator.tick(self.current_time_ms)
+    =}
+    
+    reaction(claim_request) -> claim_response {=
+        if claim_request.value is None:
+            return
+            
+        req = claim_request.value
+        success = self.coordinator.try_claim(
+            task_id=req["task_id"],
+            agent_id=req["agent_id"],
+            ttl_ms=req.get("ttl_ms", None)
+        )
+        
+        response = {
+            "success": success,
+            "task_id": req["task_id"],
+            "agent_id": req["agent_id"],
+            "logical_time": self.current_time_ms
+        }
+        
+        claim_response.set(response)
+        
+        print(f"[LF Fed {self.device_id}] Claim T={self.current_time_ms}ms: "
+              f"Task {req['task_id']} by Agent {req['agent_id']} -> {success}")
+    =}
+    
+    reaction(complete_request) -> complete_response {=
+        if complete_request.value is None:
+            return
+            
+        req = complete_request.value
+        success = self.coordinator.complete_task(
+            task_id=req["task_id"],
+            agent_id=req["agent_id"]
+        )
+        
+        response = {
+            "success": success,
+            "task_id": req["task_id"],
+            "agent_id": req["agent_id"]
+        }
+        
+        complete_response.set(response)
+    =}
+    
+    reaction(create_request) -> create_response {=
+        if create_request.value is None:
+            return
+            
+        req = create_request.value
+        task_id = self.coordinator.create_task(
+            location=req["location"],
+            task_type=req.get("task_type", "pick"),
+            priority=req.get("priority", 1.0)
+        )
+        
+        response = {
+            "success": True,
+            "task_id": task_id
+        }
+        
+        create_response.set(response)
+    =}
+    
+    reaction(get_tasks_request) -> get_tasks_response {=
+        if get_tasks_request.value is None:
+            return
+            
+        tasks = self.coordinator.get_available_tasks()
+        
+        response = {
+            "success": True,
+            "tasks": [
+                {
+                    "task_id": t.task_id,
+                    "location": t.location,
+                    "task_type": t.task_type,
+                    "priority": t.priority,
+                    "status": t.status.value
+                } for t in tasks
+            ]
+        }
+        
+        get_tasks_response.set(response)
+    =}
+}
+
+/**
+ * Federated Main Reactor
+ */
+federated reactor {
+    fed1 = new CoordinatorFederate(device_id=1)
+    fed2 = new CoordinatorFederate(device_id=2)
+    
+    fed1.claim_response -> fed2.claim_request after 0
+    fed2.claim_response -> fed1.claim_request after 0
+    
+    fed1.complete_response -> fed2.complete_request after 0
+    fed2.complete_response -> fed1.complete_request after 0
+    
+    fed1.create_response -> fed2.create_request after 0
+    fed2.create_response -> fed1.create_request after 0
+}

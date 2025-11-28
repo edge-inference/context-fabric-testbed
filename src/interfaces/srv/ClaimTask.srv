@@ -1,0 +1,9 @@
+# Attempt to claim a task
+uint32 agent_id
+uint32 task_id
+uint32 ttl_ms  # Lease time-to-live in milliseconds
+---
+# Response
+bool success
+string message
+
