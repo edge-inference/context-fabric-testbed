@@ -114,7 +114,7 @@ MIT
 ```bibtex
 @article{context-fabric2025,
   title={A Context-Aware Shared Memory Fabric for Collaborative Mobile Robots},
-  author={Your Name},
+  author={Benjamin Kubwimana},
   year={2025}
 }
 ```

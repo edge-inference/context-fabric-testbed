@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DSMUpdate.msg"
   "msg/TaskAssignment.msg"
   "msg/TaskInfo.msg"
+  "msg/TaskEvent.msg"
   "srv/TaskService.srv"
   "srv/GetAvailableTasks.srv"
   "srv/ClaimTask.srv"

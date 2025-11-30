@@ -8,7 +8,7 @@ It translates ROS 2 service calls into messages that the LF federate can process
 import rclpy
 from rclpy.node import Node
 from interfaces.srv import ClaimTask, CompleteTask, GetAvailableTasks, CreateTask
-from interfaces.msg import TaskInfo
+from interfaces.msg import TaskInfo, TaskEvent
 import socket
 import json
 import threading
@@ -39,10 +39,14 @@ class LFBridgeNode(Node):
         self.connect_to_lf()
         
         # ROS 2 Services (same interface as ZooKeeper-style coordinator)
+        # Use relative paths so they are namespaced (e.g. /robot_1/coord/...)
         self.create_service(CreateTask, 'coord/create_task', self.handle_create_task)
         self.create_service(ClaimTask, 'coord/claim_task', self.handle_claim_task)
         self.create_service(CompleteTask, 'coord/complete_task', self.handle_complete_task)
         self.create_service(GetAvailableTasks, 'coord/get_available_tasks', self.handle_get_available_tasks)
+        
+        # Publish Task Events for Metrics Dashboard
+        self.task_event_pub = self.create_publisher(TaskEvent, 'task_events', 10)
         
         self.get_logger().info(f"LF Bridge started (device_id={self.device_id}, lf_port={self.lf_port})")
     
@@ -78,7 +82,16 @@ class LFBridgeNode(Node):
         except Exception as e:
             self.get_logger().error(f"LF communication error: {e}")
             return {'success': False, 'error': str(e)}
-    
+
+    def publish_event(self, task_id, agent_id, event_type):
+        """Publish task lifecycle event"""
+        msg = TaskEvent()
+        msg.task_id = int(task_id)
+        msg.agent_id = int(agent_id)
+        msg.event_type = event_type
+        msg.timestamp_ms = self.get_clock().now().nanoseconds // 1000000
+        self.task_event_pub.publish(msg)
+
     def handle_create_task(self, request, response):
         """Forward create task request to LF"""
         lf_request = {
@@ -92,6 +105,9 @@ class LFBridgeNode(Node):
         
         response.success = lf_response.get('success', False)
         response.task_id = lf_response.get('task_id', 0)
+        
+        if response.success:
+            self.publish_event(response.task_id, 0, "CREATED")
         
         return response
     
@@ -111,6 +127,7 @@ class LFBridgeNode(Node):
         
         if response.success:
             self.get_logger().info(f"Agent {request.agent_id} claimed task {request.task_id} (LF deterministic)")
+            self.publish_event(request.task_id, request.agent_id, "CLAIMED")
         
         return response
     
@@ -126,6 +143,13 @@ class LFBridgeNode(Node):
         
         response.success = lf_response.get('success', False)
         response.message = f"Task {request.task_id} completed"
+        
+        if response.success:
+            self.get_logger().info(f"Agent {request.agent_id} completed task {request.task_id}")
+            self.publish_event(request.task_id, request.agent_id, "COMPLETED")
+        else:
+            self.get_logger().warn(f"Agent {request.agent_id} failed to complete task {request.task_id}")
+            self.publish_event(request.task_id, request.agent_id, "FAILED")
         
         return response
     

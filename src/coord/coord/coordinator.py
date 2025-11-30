@@ -10,8 +10,12 @@ Provides strong consistency for task management with:
 from typing import Dict, List, Optional
 import time
 
-from .lease_manager import LeaseManager
-from .task_registry import TaskRegistry, TaskStatus, Task
+try:
+    from .lease_manager import LeaseManager
+    from .task_registry import TaskRegistry, TaskStatus, Task
+except ImportError:
+    from lease_manager import LeaseManager
+    from task_registry import TaskRegistry, TaskStatus, Task
 
 
 class Coordinator:
@@ -113,6 +117,27 @@ class Coordinator:
             self.metrics['claim_conflicts'] += 1
         
         return lease_success
+    
+    def acquire_node_lock(self, node_id: int, agent_id: int, ttl_ms: int = 30000) -> bool:
+        """
+        Acquire JIT exclusive lock on a physical node resource.
+        Short-term lock (default 30s) for preventing collisions.
+        """
+        node_resource_id = f"node_{node_id}"
+        return self.lease_manager.try_acquire(
+            resource_id=node_resource_id,
+            owner_id=agent_id,
+            ttl_ms=ttl_ms,
+            current_time_ms=self.current_time_ms
+        )
+    
+    def release_node_lock(self, node_id: int, agent_id: int) -> bool:
+        """Release exclusive lock on a physical node resource."""
+        node_resource_id = f"node_{node_id}"
+        return self.lease_manager.release(
+            resource_id=node_resource_id,
+            owner_id=agent_id
+        )
     
     def renew_claim(self, task_id: int, agent_id: int, ttl_ms: int = None) -> bool:
         """Renew an existing lease to extend TTL"""

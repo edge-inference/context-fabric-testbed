@@ -1,153 +1,290 @@
-/**
- * Federated Coordinator for ROS2 Warehouse Testbed
- * 
- * Implements distributed task coordination with deterministic execution.
- * Each federate maintains synchronized state through logical time ordering.
- */
-
 target Python {
-    coordination: centralized,
-    files: ["../coord/lease_manager.py", "../coord/task_registry.py", "../coord/coordinator.py"]
+  coordination: centralized,
+  files: ["../coord/lease_manager.py", "../coord/task_registry.py", "../coord/coordinator.py"]
 }
 
 preamble {=
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../coord"))
+  import sys
+  import os
+  import socket
+  import json
+  import select
 
-from coordinator import Coordinator
+  # Add local path for imports
+  sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../coord"))
+  from coordinator import Coordinator
 =}
 
-/**
- * CoordinatorFederate: Replicated coordinator on each Jetson
- */
-reactor CoordinatorFederate(
-    device_id = 1,
-    lease_ttl_ms = 300000
-) {
-    state coordinator
-    state current_time_ms = 0
+reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
+  input proposal_from_fed1
+  input proposal_from_fed2
+  output proposal_out
+
+  state coordinator
+  state current_time_ms = 0
+  
+  # Socket State (Single Threaded)
+  state sock
+  state clients # fd -> socket object
+  state client_buffers # fd -> string buffer
+  state request_queue # list of (req_id, data, origin_fd)
+  state pending_responses # req_id -> origin_fd
+  
+  state local_requests # req_id -> original_req_id (for responses)
+  state next_req_seq = 0
+
+  logical action next_microstep
+  
+  # Timer for polling socket IO (approx 100Hz)
+  timer socket_poll(0, 10 msec)
+  timer tick(0, 100 msec)
+
+  reaction(startup) {=
+    self.coordinator = Coordinator(default_lease_ttl_ms=self.lease_ttl_ms)
+    self.local_requests = {}
+    print(f"[LF Coordinator Federate {self.device_id}] Started")
     
-    input claim_request
-    input complete_request
-    input create_request
-    input get_tasks_request
+    # Initialize Non-Blocking Socket
+    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    self.sock.setblocking(False)
+    port = 9000 + self.device_id
+    try:
+        self.sock.bind(("0.0.0.0", port))
+        self.sock.listen(5)
+        print(f"[LF Fed {self.device_id}] Listening on port {port} (Non-Blocking)")
+    except Exception as e:
+        print(f"[LF Fed {self.device_id}] FATAL: Failed to bind port {port}: {e}")
     
-    output claim_response
-    output complete_response
-    output create_response
-    output get_tasks_response
-    
-    timer tick(0, 100 msec)
-    
-    reaction(startup) {=
-        self.coordinator = Coordinator(default_lease_ttl_ms=self.lease_ttl_ms)
-        print(f"[LF Coordinator Federate {self.device_id}] Started")
-    =}
-    
-    reaction(tick) {=
+    self.clients = {}
+    self.client_buffers = {}
+    self.request_queue = []
+    self.pending_responses = {}
+  =}
+
+  # 1. Poll Sockets (Input)
+  reaction(socket_poll) -> next_microstep {=
+    # Handle New Connections and Incoming Data
+    inputs = [self.sock] + list(self.clients.values())
+    try:
+        readable, _, _ = select.select(inputs, [], [], 0)
+    except Exception as e:
+        # Handle bad file descriptors by cleaning up
+        to_remove = []
+        for fd, s in self.clients.items():
+            try:
+                select.select([s], [], [], 0)
+            except:
+                to_remove.append(fd)
+        for fd in to_remove:
+            print(f"Removing bad client fd {fd}")
+            del self.clients[fd]
+            if fd in self.client_buffers: del self.client_buffers[fd]
+        return
+
+    for s in readable:
+        if s is self.sock:
+            # Accept new connection
+            try:
+                conn, addr = s.accept()
+                conn.setblocking(False)
+                fd = conn.fileno()
+                self.clients[fd] = conn
+                self.client_buffers[fd] = ""
+                # print(f"New connection from {addr}, fd={fd}")
+            except: pass
+        else:
+            # Read data
+            fd = s.fileno()
+            try:
+                data = s.recv(4096)
+                if data:
+                    self.client_buffers[fd] += data.decode("utf-8")
+                    # Process complete lines
+                    while "\n" in self.client_buffers[fd]:
+                        line, rest = self.client_buffers[fd].split("\n", 1)
+                        self.client_buffers[fd] = rest
+                        if not line.strip(): continue
+                        
+                        try:
+                            # Parse JSON
+                            obj = json.loads(line)
+                            req_id = str(id(obj)) + "_" + str(obj.get("agent_id", "0"))
+                            
+                            # Queue it
+                            self.request_queue.append((req_id, obj, fd))
+                            self.pending_responses[req_id] = fd
+                        except Exception as e:
+                            print(f"JSON Parse Error: {e}")
+                else:
+                    # EOF
+                    # print(f"Client disconnected fd={fd}")
+                    s.close()
+                    del self.clients[fd]
+                    if fd in self.client_buffers: del self.client_buffers[fd]
+            except Exception as e:
+                # Error reading
+                print(f"Read error fd={fd}: {e}")
+                try: s.close()
+                except: pass
+                if fd in self.clients: del self.clients[fd]
+                if fd in self.client_buffers: del self.client_buffers[fd]
+
+    # If we have pending requests, schedule processing immediately
+    if self.request_queue:
+        next_microstep.schedule(0, None)
+  =}
+
+  # 2. Timer Tick (Leases)
+  reaction(tick) -> next_microstep {=
+    try:
         self.current_time_ms = int(lf.time.logical_elapsed() / 1_000_000)
         self.coordinator.tick(self.current_time_ms)
-    =}
+        # We don't forcefully schedule next_microstep here unless we want periodic proposal checks
+        # But for responsiveness, socket_poll handles user requests.
+        # Tick handles internal state. 
+        # If we want to ensure proposals go out even if no requests (e.g. for consistency), we could.
+        # But we only propose when we have REQUESTS.
+    except Exception as e:
+        print(f"Tick Error: {e}")
+  =}
+
+  # 3. Generate Proposals (Bundled)
+  reaction(next_microstep) -> proposal_out {=
+    if not self.request_queue:
+        return
+
+    # Drain queue
+    # IMPORTANT: Copy and clear to avoid infinite processing if poll adds more
+    current_batch = list(self.request_queue)
+    self.request_queue.clear()
+
+    bundled_data = []
     
-    reaction(claim_request) -> claim_response {=
-        if claim_request.value is None:
-            return
+    for req_id, data, origin_fd in current_batch:
+        full_req_id = f"{self.device_id}_{self.next_req_seq}"
+        self.next_req_seq += 1
+        
+        # Map global ID to (req_id, origin_fd)
+        self.local_requests[full_req_id] = (req_id, origin_fd)
+        
+        bundled_data.append({
+            "req_id": full_req_id,
+            "data": data
+        })
+
+    proposal = {
+        "origin_id": self.device_id,
+        "bundled_requests": bundled_data,
+        "logical_time": self.current_time_ms
+    }
+
+    print(f"[LF Fed {self.device_id}] Broadcasting bundle of {len(bundled_data)} requests")
+    proposal_out.set(proposal)
+  =}
+
+  # 4. Process Proposals & Reply
+  reaction(proposal_from_fed1, proposal_from_fed2) {=
+    for proposal_input in [proposal_from_fed1, proposal_from_fed2]:
+        if not proposal_input.is_present:
+            continue
             
-        req = claim_request.value
-        success = self.coordinator.try_claim(
-            task_id=req["task_id"],
-            agent_id=req["agent_id"],
-            ttl_ms=req.get("ttl_ms", None)
-        )
+        proposal = proposal_input.value
+        origin_id = proposal["origin_id"]
         
-        response = {
-            "success": success,
-            "task_id": req["task_id"],
-            "agent_id": req["agent_id"],
-            "logical_time": self.current_time_ms
-        }
-        
-        claim_response.set(response)
-        
-        print(f"[LF Fed {self.device_id}] Claim T={self.current_time_ms}ms: "
-              f"Task {req['task_id']} by Agent {req['agent_id']} -> {success}")
-    =}
-    
-    reaction(complete_request) -> complete_response {=
-        if complete_request.value is None:
-            return
+        request_list = proposal.get("bundled_requests", [])
+        if not request_list and "data" in proposal:
+             request_list = [{"req_id": proposal["req_id"], "data": proposal["data"]}]
+
+        for req_item in request_list:
+            req_id = req_item["req_id"]
+            data = req_item["data"]
+            req_type = data.get("type")
+
+            response = {"success": False}
+
+            if req_type == "create":
+                tid = self.coordinator.create_task(
+                    location=data["location"],
+                    task_type=data.get("task_type", "pick"),
+                    priority=data.get("priority", 1.0)
+                )
+                response = {"success": True, "task_id": tid}
+
+            elif req_type == "claim":
+                success = self.coordinator.try_claim(
+                    task_id=data["task_id"],
+                    agent_id=data["agent_id"],
+                    ttl_ms=data.get("ttl_ms", None)
+                )
+                print(f"[LF Fed {self.device_id}] Claim Task {data['task_id']} by Agent {data['agent_id']} -> {success}")
+                response = {"success": success}
+
+            elif req_type == "complete":
+                success = self.coordinator.complete_task(
+                    task_id=data["task_id"],
+                    agent_id=data["agent_id"]
+                )
+                print(f"[LF Fed {self.device_id}] Complete Task {data['task_id']} by Agent {data['agent_id']} -> {success}")
+                response = {"success": success}
+
+            elif req_type == "get_tasks":
+                 tasks = self.coordinator.get_available_tasks()
+                 response = {
+                    "success": True,
+                    "tasks": [
+                        {
+                            "task_id": t.task_id,
+                            "location": t.location,
+                            "task_type": t.task_type,
+                            "priority": t.priority,
+                            "status": t.status.value
+                        } for t in tasks
+                    ]
+                }
             
-        req = complete_request.value
-        success = self.coordinator.complete_task(
-            task_id=req["task_id"],
-            agent_id=req["agent_id"]
-        )
-        
-        response = {
-            "success": success,
-            "task_id": req["task_id"],
-            "agent_id": req["agent_id"]
-        }
-        
-        complete_response.set(response)
-    =}
-    
-    reaction(create_request) -> create_response {=
-        if create_request.value is None:
-            return
+            elif req_type == "acquire_node_lock":
+                success = self.coordinator.acquire_node_lock(
+                    node_id=data["node_id"],
+                    agent_id=data["agent_id"],
+                    ttl_ms=data.get("ttl_ms", 30000)
+                )
+                response = {"success": success}
             
-        req = create_request.value
-        task_id = self.coordinator.create_task(
-            location=req["location"],
-            task_type=req.get("task_type", "pick"),
-            priority=req.get("priority", 1.0)
-        )
-        
-        response = {
-            "success": True,
-            "task_id": task_id
-        }
-        
-        create_response.set(response)
-    =}
-    
-    reaction(get_tasks_request) -> get_tasks_response {=
-        if get_tasks_request.value is None:
-            return
-            
-        tasks = self.coordinator.get_available_tasks()
-        
-        response = {
-            "success": True,
-            "tasks": [
-                {
-                    "task_id": t.task_id,
-                    "location": t.location,
-                    "task_type": t.task_type,
-                    "priority": t.priority,
-                    "status": t.status.value
-                } for t in tasks
-            ]
-        }
-        
-        get_tasks_response.set(response)
-    =}
+            elif req_type == "release_node_lock":
+                success = self.coordinator.release_node_lock(
+                    node_id=data["node_id"],
+                    agent_id=data["agent_id"]
+                )
+                response = {"success": success}
+
+            # Send response if local
+            if origin_id == self.device_id:
+                if req_id in self.local_requests:
+                    original_req_id, client_fd = self.local_requests.pop(req_id)
+                    
+                    # Locate client socket
+                    if client_fd in self.clients:
+                        client_sock = self.clients[client_fd]
+                        try:
+                            client_sock.sendall((json.dumps(response) + "\n").encode("utf-8"))
+                        except Exception as e:
+                            print(f"Error sending response to fd={client_fd}: {e}")
+                            # Cleanup dead socket
+                            try: client_sock.close()
+                            except: pass
+                            del self.clients[client_fd]
+                            if client_fd in self.client_buffers: del self.client_buffers[client_fd]
+  =}
 }
 
-/**
- * Federated Main Reactor
- */
 federated reactor {
-    fed1 = new CoordinatorFederate(device_id=1)
-    fed2 = new CoordinatorFederate(device_id=2)
-    
-    fed1.claim_response -> fed2.claim_request after 0
-    fed2.claim_response -> fed1.claim_request after 0
-    
-    fed1.complete_response -> fed2.complete_request after 0
-    fed2.complete_response -> fed1.complete_request after 0
-    
-    fed1.create_response -> fed2.create_request after 0
-    fed2.create_response -> fed1.create_request after 0
+  fed1 = new CoordinatorFederate(device_id=1)
+  fed2 = new CoordinatorFederate(device_id=2)
+
+  fed1.proposal_out -> fed1.proposal_from_fed1
+  fed1.proposal_out -> fed2.proposal_from_fed1
+
+  fed2.proposal_out -> fed1.proposal_from_fed2
+  fed2.proposal_out -> fed2.proposal_from_fed2
 }

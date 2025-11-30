@@ -44,23 +44,19 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'device_id': device_id}]
     ))
     
-    # 3. Start Agents with unique IDs derived from device_id
-    # Example: Device 1 -> Agents 10, 11
-    #          Device 2 -> Agents 20, 21
-    base_id = device_id * 10
-    agents_per_device = 2
-    
-    for i in range(agents_per_device):
-        agent_id = base_id + i
-        nodes.append(Node(
-            package='agent',
-            executable='agent_node',
-            name=f'agent_{agent_id}',
-            parameters=[{
-                'agent_id': agent_id,
-                'start_node': 0
-            }]
-        ))
+    # 3. Start Agent Node (One per device/robot)
+    # Device ID = Robot ID = Agent ID
+    nodes.append(Node(
+        package='agent',
+        executable='agent_node',
+        name=f'agent_{device_id}',
+        parameters=[{
+            'agent_id': device_id,
+            'device_id': device_id,
+            'start_node': 0
+        }],
+        output='screen'
+    ))
 
     return nodes
 

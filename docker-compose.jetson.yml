@@ -1,0 +1,31 @@
+# Docker Compose for Jetson devices
+# Run federates that connect to RTI on x86 station (172.17.174.183)
+
+services:
+  fed1:
+    image: context-fabric-fed
+    container_name: fed1
+    network_mode: host
+    environment:
+      - LF_RTI_HOST=172.17.174.183
+      - LF_RTI_PORT=15045
+      - LF_FEDERATION_ID=context-fabric-testbed-2025
+    command: /app/fed-gen/coordinator/bin/federate__fed1 -i context-fabric-testbed-2025 --rti 172.17.174.183:15045
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    
+  # Uncomment for second Jetson device running fed2:
+  # fed2:
+  #   image: context-fabric-fed
+  #   container_name: fed2
+  #   network_mode: host
+  #   environment:
+  #     - LF_RTI_HOST=172.17.174.183
+  #     - LF_RTI_PORT=15045
+  #     - LF_FEDERATION_ID=context-fabric-testbed-2025
+  #   command: /app/fed-gen/coordinator/bin/federate__fed2 -i context-fabric-testbed-2025 --rti 172.17.174.183:15045
+  #   stdin_open: true
+  #   tty: true
+  #   restart: unless-stopped
+

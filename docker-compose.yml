@@ -1,0 +1,69 @@
+services:
+  rti:
+    image: context-fabric-rti
+    container_name: rti
+    network_mode: host
+    stdin_open: true
+    tty: true
+    
+  robot1:
+    image: context-fabric-fed
+    container_name: robot1
+    network_mode: host
+    depends_on:
+      - rti
+    environment:
+      - LF_RTI_HOST=172.17.174.183
+      - LF_RTI_PORT=15045
+      - LF_FEDERATION_ID=context-fabric-testbed-2025
+      - ROS_DOMAIN_ID=42
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/ros2_ws/config/fastdds_udp_only.xml
+    command: >
+      /ros2_ws/scripts/start_robot.sh 
+      1 
+      /ros2_ws/fed-gen/coordinator/bin/federate__fed1 
+      172.17.174.183 
+      15045 
+      context-fabric-testbed-2025
+    volumes:
+      - ./config/fastdds_udp_only.xml:/ros2_ws/config/fastdds_udp_only.xml
+    stdin_open: true
+    tty: true
+    
+  robot2:
+    image: context-fabric-fed
+    container_name: robot2
+    network_mode: host
+    depends_on:
+      - rti
+    environment:
+      - LF_RTI_HOST=172.17.174.183
+      - LF_RTI_PORT=15045
+      - LF_FEDERATION_ID=context-fabric-testbed-2025
+      - ROS_DOMAIN_ID=42
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/ros2_ws/config/fastdds_udp_only.xml
+    command: >
+      /ros2_ws/scripts/start_robot.sh 
+      2 
+      /ros2_ws/fed-gen/coordinator/bin/federate__fed2 
+      172.17.174.183 
+      15045 
+      context-fabric-testbed-2025
+    volumes:
+      - ./config/fastdds_udp_only.xml:/ros2_ws/config/fastdds_udp_only.xml
+    stdin_open: true
+    tty: true
+
+  metrics:
+    image: context-fabric-fed
+    container_name: metrics
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=42
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/ros2_ws/config/fastdds_udp_only.xml
+    command: /ros2_ws/scripts/start_metrics.sh
+    volumes:
+      - ./config/fastdds_udp_only.xml:/ros2_ws/config/fastdds_udp_only.xml
+    stdin_open: true
+    tty: true
+

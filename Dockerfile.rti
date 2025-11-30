@@ -1,0 +1,36 @@
+FROM ros:humble-ros-base
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies for RTI (need Java for lfc)
+RUN apt-get update && apt-get install -y \
+    curl \
+    cmake \
+    build-essential \
+    openjdk-17-jre \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Lingua Franca Compiler (lfc) using official installer
+RUN curl -Ls https://install.lf-lang.org | bash -s cli
+
+# Add lfc to PATH (installer puts it in ~/.local/bin)
+ENV PATH="/root/.local/bin:$PATH"
+
+# Set working directory
+WORKDIR /app
+
+# Copy only necessary files for LF compilation
+COPY src/coord/lf/ /app/src/coord/lf/
+COPY src/coord/coord/ /app/src/coord/coord/
+
+# Compile LF code to generate RTI binary
+RUN cd /app/src/coord/lf && \
+    lfc -f coordinator.lf
+
+# RTI binary location after compilation
+# /app/fed-gen/coordinator/bin/RTI
+
+# Default command: run RTI with 2 federates
+CMD ["/app/fed-gen/coordinator/bin/RTI", "-i", "context-fabric-testbed-2025", "-n", "2", "-c", "init", "exchanges-per-interval", "10"]
+

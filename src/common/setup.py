@@ -13,7 +13,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools', 'networkx', 'numpy'],
+    install_requires=['setuptools', 'networkx', 'numpy', 'pyyaml'],
     zip_safe=True,
     maintainer='User',
     maintainer_email='user@example.com',
@@ -21,7 +21,9 @@ setup(
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'metrics_node = common.metrics_node:main',
+        ],
     },
 )
 
