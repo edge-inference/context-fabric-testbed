@@ -8,8 +8,20 @@ NC='\033[0m' # No Color
 
 COMPOSE_FILE="docker-compose.jetson.yml"
 
+# Detect Docker Compose command
+if docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker compose"
+elif docker-compose --version >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo -e "${RED}Error: Neither 'docker compose' nor 'docker-compose' found.${NC}"
+    exit 1
+fi
+
 help() {
     echo -e "${GREEN}Context-Fabric Jetson Deployment Tool${NC}"
+    echo ""
+    echo "Using: $DOCKER_COMPOSE"
     echo ""
     echo "Usage: ./jetson.sh [COMMAND] [ARGS...]"
     echo ""
@@ -53,20 +65,20 @@ start() {
         echo -e "${GREEN}Starting $ROBOT_NAME using default RTI IP from compose file...${NC}"
     fi
     
-    docker compose -f $COMPOSE_FILE up -d $ROBOT_NAME
+    $DOCKER_COMPOSE -f $COMPOSE_FILE up -d $ROBOT_NAME
     
     echo -e "${GREEN}$ROBOT_NAME started. Logs:${NC}"
-    docker compose -f $COMPOSE_FILE logs -f $ROBOT_NAME
+    $DOCKER_COMPOSE -f $COMPOSE_FILE logs -f $ROBOT_NAME
 }
 
 stop() {
     echo -e "${YELLOW}Stopping Jetson containers...${NC}"
-    docker compose -f $COMPOSE_FILE down
+    $DOCKER_COMPOSE -f $COMPOSE_FILE down
     echo -e "${GREEN}Stopped.${NC}"
 }
 
 logs() {
-    docker compose -f $COMPOSE_FILE logs -f
+    $DOCKER_COMPOSE -f $COMPOSE_FILE logs -f
 }
 
 # Main command dispatcher
