@@ -64,8 +64,12 @@ class LFBridgeNode(Node):
                     self.get_logger().warn(f"LF federate not ready, retrying... ({attempt+1}/{max_retries})")
                     time.sleep(1)
                 else:
-                    self.get_logger().error("Failed to connect to LF federate")
-                    raise
+                    self.get_logger().error(f"Cannot connect to LF federate socket on port {self.lf_port}")
+                    self.get_logger().error(f"The LF federate process failed to start or crashed during initialization.")
+                    self.get_logger().error(f"Check the LF federate logs above for the actual error.")
+                    self.get_logger().error(f"Container will restart automatically...")
+                    import sys
+                    sys.exit(1)
     
     def send_to_lf(self, message: dict) -> dict:
         """Send message to LF federate and wait for response"""

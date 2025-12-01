@@ -3,6 +3,7 @@ services:
     image: context-fabric-fed
     container_name: robot1
     network_mode: host
+    restart: on-failure
     build:
       context: .
       dockerfile: Dockerfile.fed
@@ -28,6 +29,7 @@ services:
     image: context-fabric-fed
     container_name: robot2
     network_mode: host
+    restart: on-failure
     build:
       context: .
       dockerfile: Dockerfile.fed

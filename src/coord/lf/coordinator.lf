@@ -22,21 +22,19 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
 
   state coordinator
   state current_time_ms = 0
-  
-  # Socket State (Single Threaded) - Initialized in startup
-  state sock
+
+  state sock                     # Socket State (Single Threaded) - Initialized in startup
   state clients
   state client_buffers
   state request_queue
   state pending_responses
-  
+
   state local_requests
   state next_req_seq = 0
 
   logical action next_microstep
-  
-  # Timer for polling socket IO (approx 100Hz)
-  timer socket_poll(0, 10 msec)
+
+  timer socket_poll(0, 10 msec)  # Timer for polling socket IO (approx 100Hz)
   timer tick(0, 100 msec)
 
   reaction(startup) {=
@@ -46,10 +44,10 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
     self.request_queue = []
     self.pending_responses = {}
     self.local_requests = {}
-    
+
     self.coordinator = Coordinator(default_lease_ttl_ms=self.lease_ttl_ms)
     print(f"[LF Coordinator Federate {self.device_id}] Started")
-    
+
     # Initialize Non-Blocking Socket
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -68,6 +66,10 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
 
   # 1. Poll Sockets (Input)
   reaction(socket_poll) -> next_microstep {=
+    # Skip if socket not initialized yet (startup still running)
+    if not hasattr(self, "sock") or self.sock is None:
+      return
+
     # Handle New Connections and Incoming Data
     inputs = [self.sock] + list(self.clients.values())
     try:
@@ -109,12 +111,12 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
                         line, rest = self.client_buffers[fd].split("\n", 1)
                         self.client_buffers[fd] = rest
                         if not line.strip(): continue
-                        
+
                         try:
                             # Parse JSON
                             obj = json.loads(line)
                             req_id = str(id(obj)) + "_" + str(obj.get("agent_id", "0"))
-                            
+
                             # Queue it
                             self.request_queue.append((req_id, obj, fd))
                             self.pending_responses[req_id] = fd
@@ -146,7 +148,7 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
         self.coordinator.tick(self.current_time_ms)
         # We don't forcefully schedule next_microstep here unless we want periodic proposal checks
         # But for responsiveness, socket_poll handles user requests.
-        # Tick handles internal state. 
+        # Tick handles internal state.
         # If we want to ensure proposals go out even if no requests (e.g. for consistency), we could.
         # But we only propose when we have REQUESTS.
     except Exception as e:
@@ -164,14 +166,14 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
     self.request_queue.clear()
 
     bundled_data = []
-    
+
     for req_id, data, origin_fd in current_batch:
         full_req_id = f"{self.device_id}_{self.next_req_seq}"
         self.next_req_seq += 1
-        
+
         # Map global ID to (req_id, origin_fd)
         self.local_requests[full_req_id] = (req_id, origin_fd)
-        
+
         bundled_data.append({
             "req_id": full_req_id,
             "data": data
@@ -192,10 +194,10 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
     for proposal_input in [proposal_from_fed1, proposal_from_fed2]:
         if not proposal_input.is_present:
             continue
-            
+
         proposal = proposal_input.value
         origin_id = proposal["origin_id"]
-        
+
         request_list = proposal.get("bundled_requests", [])
         if not request_list and "data" in proposal:
              request_list = [{"req_id": proposal["req_id"], "data": proposal["data"]}]
@@ -246,7 +248,7 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
                         } for t in tasks
                     ]
                 }
-            
+
             elif req_type == "acquire_node_lock":
                 success = self.coordinator.acquire_node_lock(
                     node_id=data["node_id"],
@@ -254,7 +256,7 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
                     ttl_ms=data.get("ttl_ms", 30000)
                 )
                 response = {"success": success}
-            
+
             elif req_type == "release_node_lock":
                 success = self.coordinator.release_node_lock(
                     node_id=data["node_id"],
@@ -266,7 +268,7 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
             if origin_id == self.device_id:
                 if req_id in self.local_requests:
                     original_req_id, client_fd = self.local_requests.pop(req_id)
-                    
+
                     # Locate client socket
                     if client_fd in self.clients:
                         client_sock = self.clients[client_fd]

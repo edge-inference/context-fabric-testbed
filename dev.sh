@@ -13,10 +13,11 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|clean|build}"
+    echo "Usage: $0 {start|start-rti|stop|restart|status|logs|clean|build}"
     echo ""
     echo "Commands:"
     echo "  start     - Start all containers"
+    echo "  start-rti - Start only RTI and metrics (for distributed setup)"
     echo "  stop      - Stop all containers"
     echo "  restart   - Restart all containers"
     echo "  status    - Show container status"
@@ -31,6 +32,25 @@ monitor() {
     echo -e "${GREEN}Attaching to Metrics Dashboard... (Ctrl+C to detach)${NC}"
     # Use logs -f because it's non-interactive logging for now
     docker compose logs -f metrics
+}
+
+start_rti() {
+    echo -e "${GREEN}Starting RTI and Metrics only (distributed mode)...${NC}"
+    docker compose up -d rti metrics
+    
+    echo -e "${YELLOW}Waiting for RTI to initialize...${NC}"
+    sleep 3
+    
+    if ! docker ps | grep -q rti; then
+        echo -e "${RED}RTI container failed to start${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}RTI and Metrics started.${NC}"
+    echo -e "${YELLOW}RTI listening on: 172.17.174.183:15045${NC}"
+    echo -e "${YELLOW}Federation ID: context-fabric-testbed-2025${NC}"
+    echo ""
+    echo -e "${GREEN}Now start robot containers on Jetson devices.${NC}"
 }
 
 start() {
@@ -138,6 +158,9 @@ build() {
 case "${1:-}" in
     start)
         start
+        ;;
+    start-rti)
+        start_rti
         ;;
     stop)
         stop
