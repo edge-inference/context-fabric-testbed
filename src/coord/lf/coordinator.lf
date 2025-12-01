@@ -23,14 +23,14 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
   state coordinator
   state current_time_ms = 0
   
-  # Socket State (Single Threaded)
+  # Socket State (Single Threaded) - Initialized in startup
   state sock
-  state clients # fd -> socket object
-  state client_buffers # fd -> string buffer
-  state request_queue # list of (req_id, data, origin_fd)
-  state pending_responses # req_id -> origin_fd
+  state clients
+  state client_buffers
+  state request_queue
+  state pending_responses
   
-  state local_requests # req_id -> original_req_id (for responses)
+  state local_requests
   state next_req_seq = 0
 
   logical action next_microstep
@@ -40,8 +40,14 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
   timer tick(0, 100 msec)
 
   reaction(startup) {=
-    self.coordinator = Coordinator(default_lease_ttl_ms=self.lease_ttl_ms)
+    # Initialize state variables FIRST (before any timer can fire)
+    self.clients = {}
+    self.client_buffers = {}
+    self.request_queue = []
+    self.pending_responses = {}
     self.local_requests = {}
+    
+    self.coordinator = Coordinator(default_lease_ttl_ms=self.lease_ttl_ms)
     print(f"[LF Coordinator Federate {self.device_id}] Started")
     
     # Initialize Non-Blocking Socket
@@ -55,11 +61,9 @@ reactor CoordinatorFederate(device_id=1, lease_ttl_ms=300000) {
         print(f"[LF Fed {self.device_id}] Listening on port {port} (Non-Blocking)")
     except Exception as e:
         print(f"[LF Fed {self.device_id}] FATAL: Failed to bind port {port}: {e}")
-    
-    self.clients = {}
-    self.client_buffers = {}
-    self.request_queue = []
-    self.pending_responses = {}
+        print(f"[LF Fed {self.device_id}] FATAL: Socket binding failed. Exiting.")
+        import sys
+        sys.exit(1)
   =}
 
   # 1. Poll Sockets (Input)
